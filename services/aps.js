@@ -29,10 +29,11 @@ service.ensureBucketExists = async (bucketKey) => {
     try {
         await ossClient.getBucketDetails(bucketKey, { accessToken });
     } catch (err) {
-        if (err.axiosError.response.status === 404) {
-            await ossClient.createBucket(Region.Us, { bucketKey: bucketKey, policyKey: PolicyKey.Persistent }, { accessToken});
+        const status = err.axiosError?.response?.status || err.response?.status || err.statusCode;
+        if (status === 404 || err.message?.includes('404')) {
+            await ossClient.createBucket(Region.Us, { bucketKey: bucketKey, policyKey: PolicyKey.Persistent }, { accessToken });
         } else {
-            throw err;  
+            throw err;
         }
     }
 };
@@ -47,7 +48,24 @@ service.listObjects = async () => {
         resp = await ossClient.getObjects(APS_BUCKET, { limit: 64, startAt, accessToken });
         objects = objects.concat(resp.items);
     }
-    return objects;
+    return objects.filter(obj => !obj.objectKey.toLowerCase().endsWith('.rfa'));
+};
+
+service.getUploadUrl = async (objectName) => {
+    await service.ensureBucketExists(APS_BUCKET);
+    const accessToken = await getInternalToken();
+    return await ossClient.signedS3Upload(APS_BUCKET, objectName, { accessToken });
+};
+
+service.completeUpload = async (objectName, uploadKey) => {
+    const accessToken = await getInternalToken();
+    return await ossClient.completeSignedS3Upload(
+        APS_BUCKET,
+        objectName,
+        uploadKey,
+        { uploadKey },    // 4º parámetro: body con el uploadKey
+        { accessToken }   // 5º parámetro: optionalArgs
+    );
 };
 
 service.uploadObject = async (objectName, filePath) => {
@@ -81,7 +99,8 @@ service.getManifest = async (urn) => {
         const manifest = await modelDerivativeClient.getManifest(urn, { accessToken });
         return manifest;
     } catch (err) {
-        if (err.axiosError.response.status === 404) {
+        const status = err.axiosError?.response?.status || err.response?.status || err.statusCode;
+        if (status === 404 || err.message?.includes('404')) {
             return null;
         } else {
             throw err;
@@ -89,4 +108,4 @@ service.getManifest = async (urn) => {
     }
 };
 
-service.urnify = (id) => Buffer.from(id).toString('base64').replace(/=/g, '');
+service.urnify = (id) => Buffer.from(id).toString('base64url');

@@ -33,23 +33,38 @@ async function setupModelUpload(viewer) {
     upload.onclick = () => input.click();
     input.onchange = async () => {
         const file = input.files[0];
-        let data = new FormData();
-        data.append('model-file', file);
-        if (file.name.endsWith('.zip')) { // When uploading a zip file, ask for the main design file in the archive
-            const entrypoint = window.prompt('Please enter the filename of the main design inside the archive.');
-            data.append('model-zip-entrypoint', entrypoint);
-        }
+        if (!file) return;
         upload.setAttribute('disabled', 'true');
         models.setAttribute('disabled', 'true');
         const filename = document.createElement('em');
         filename.textContent = file.name;
-        showNotification('Uploading model ', filename, '. Do not reload the page.');
+        showNotification('Uploading model ', filename, ' directly to Autodesk S3...');
         try {
-            const resp = await fetch('/api/models', { method: 'POST', body: data });
-            if (!resp.ok) {
-                throw new Error(await resp.text());
-            }
-            const model = await resp.json();
+            // 1. Pedir URL firmada de S3 al backend (solo envía el nombre)
+            const urlResp = await fetch('/api/models/upload-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: file.name })
+            });
+            if (!urlResp.ok) throw new Error(await urlResp.text());
+            const { uploadKey, url } = await urlResp.json();
+
+            // 2. Subir el archivo pesado DIRECTO a Amazon S3 (evita el límite de Codespaces)
+            const s3Resp = await fetch(url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file
+            });
+
+            // 3. Avisar al backend que terminó e iniciar traducción
+            const compResp = await fetch('/api/models/complete-upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: file.name, uploadKey })
+            });
+            if (!compResp.ok) throw new Error(await compResp.text());
+            const model = await compResp.json();
+
             setupModelSelection(viewer, model.urn);
         } catch (err) {
             alert(`Could not upload model ${file.name}. See the console for more details.`);

@@ -1,6 +1,6 @@
 const express = require('express');
 const formidable = require('express-formidable');
-const { listObjects, uploadObject, translateObject, getManifest, urnify } = require('../services/aps.js');
+const { listObjects, uploadObject, translateObject, getManifest, urnify, getUploadUrl, completeUpload } = require('../services/aps.js');
 
 let router = express.Router();
 
@@ -31,7 +31,7 @@ router.get('/api/models/:urn/status', async function (req, res, next) {
                     messages = messages.concat(derivative.messages || []);
                     if (derivative.children) {
                         for (const child of derivative.children) {
-                            messages.concat(child.messages || []);
+                            messages = messages.concat(child.messages || []);
                         }
                     }
                 }
@@ -40,6 +40,40 @@ router.get('/api/models/:urn/status', async function (req, res, next) {
         } else {
             res.json({ status: 'n/a' });
         }
+    } catch (err) {
+        next(err);
+    }
+});
+
+// 1. Pide la URL firmada de S3 (solo envía el nombre del archivo, 1 KB)
+router.post('/api/models/upload-url', express.json(), async function (req, res, next) {
+    try {
+        const { filename } = req.body;
+        if (!isSafeFilename(filename)) {
+            res.status(400).send('The filename contains invalid characters.');
+            return;
+        }
+        const data = await getUploadUrl(filename);
+        res.json({ uploadKey: data.uploadKey, url: data.urls[0] });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// 2. Avisa que ya terminó de subir a S3 e inicia la traducción
+router.post('/api/models/complete-upload', express.json(), async function (req, res, next) {
+    try {
+        const { filename, uploadKey } = req.body;
+        if (!isSafeFilename(filename)) {
+            res.status(400).send('The filename contains invalid characters.');
+            return;
+        }
+        const obj = await completeUpload(filename, uploadKey);
+        await translateObject(urnify(obj.objectId));
+        res.json({
+            name: obj.objectKey,
+            urn: urnify(obj.objectId)
+        });
     } catch (err) {
         next(err);
     }
